@@ -320,8 +320,6 @@ instead of scraping those sites. It is the easiest way to get real jobs in your 
   search uses one request.
 - **Daily limit:** JobPilot stops calling JSearch for the day once it reaches your limit
   (default 6, which keeps a free plan going all month). Settings shows how many it used today.
-- **Freshers:** if your profile has under 2 years of experience, JSearch is asked for roles
-  needing under 3 years, full-time or internship.
 - **Where it comes from:** each job shows its real board, e.g. *JSearch · LinkedIn*.
 
 **Set it up:** make an account at [rapidapi.com](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch),
