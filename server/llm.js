@@ -13,6 +13,11 @@ const P = require('./prompts'); // all quality-critical system prompts live in p
 // One hung LLM request must not stall an entire batch generate; generation can
 // be slow, so the ceiling is generous.
 const LLM_TIMEOUT_MS = 60000;
+// The Claude Code CLI starts a whole process per call (several seconds on
+// Windows before any thinking happens) and then thinks before answering, so a
+// 15-job scoring chunk routinely ran past 60 s and silently fell back to
+// keyword scores. It gets a longer ceiling of its own.
+const CLI_TIMEOUT_MS = 180000;
 
 const PROVIDERS = {
   groq: {
@@ -64,8 +69,19 @@ const CLI_ARGS = [
 // Where the CLI usually lives. `claude` alone covers anything already on PATH;
 // the rest are the common installer targets for when the server was started
 // from a launcher with a minimal PATH.
+// On Windows, `claude` on PATH is usually the npm `claude.cmd` shim, which
+// execFile cannot run without a shell (and a shell would mangle the long
+// --system-prompt argument). So point straight at the real claude.exe: the
+// native installer's copy, then the one inside the npm package.
+const WIN_CANDIDATES = process.platform === 'win32' ? [
+  path.join(os.homedir(), '.local', 'bin', 'claude.exe'),
+  process.env.APPDATA && path.join(process.env.APPDATA, 'npm', 'node_modules',
+    '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
+  'claude.exe'
+] : [];
 const CLI_CANDIDATES = [
   process.env.CLAUDE_CLI_PATH,
+  ...WIN_CANDIDATES,
   'claude',
   path.join(os.homedir(), '.local', 'bin', 'claude'),
   '/opt/homebrew/bin/claude',
@@ -99,8 +115,14 @@ function probeClaudeCode() {
         cwd: os.tmpdir(),
         env: cliEnv()
       });
-    } catch {
-      continue; // not installed at this path (or it failed to run) — try the next
+    } catch (err) {
+      // `auth status` exits non-zero when nobody is signed in but still prints
+      // its JSON — that is "installed, not signed in", not "not installed".
+      if (err && err.stdout && String(err.stdout).trim().startsWith('{')) {
+        out = String(err.stdout);
+      } else {
+        continue; // not installed at this path (or it failed to run) — try the next
+      }
     }
     let status;
     try { status = JSON.parse(out); } catch { status = null; }
@@ -164,7 +186,7 @@ function runClaudeCode(system, prompt, model) {
       {
         cwd: os.tmpdir(),        // neutral cwd — never the user's project
         env: cliEnv(),
-        timeout: LLM_TIMEOUT_MS, // Node kills the child itself once this elapses
+        timeout: CLI_TIMEOUT_MS, // Node kills the child itself once this elapses
         killSignal: 'SIGKILL',
         maxBuffer: 16 * 1024 * 1024
       },
@@ -475,9 +497,20 @@ function mockProfile(cvText) {
 
 // ---------- Job match scoring ----------
 
+// Whole-word, case-insensitive skill match. Letters/digits on either side mean
+// "inside another word"; punctuation is fine, so "c++", "next.js" and "ci/cd"
+// still match as written.
+function hasWord(lowerText, skill) {
+  const s = String(skill || '').toLowerCase().trim();
+  if (!s) return false;
+  const esc = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![a-z0-9])${esc}(?![a-z0-9])`).test(lowerText);
+}
+
 async function scoreJobs(profile, jobs) {
-  // score in chunks — one giant call truncates and loses accuracy
-  const CHUNK = 15;
+  // score in chunks — one giant call truncates and loses accuracy. The CLI is
+  // much slower per call, so it gets smaller chunks to stay inside its timeout.
+  const CHUNK = cfg().cli ? 5 : 15;
   if (jobs.length > CHUNK) {
     const map = {};
     for (let i = 0; i < jobs.length; i += CHUNK) {
@@ -506,16 +539,23 @@ async function scoreJobs(profile, jobs) {
     for (const s of result.scores) map[String(s.id)] = { score: s.score, reasons: s.reasons || [] };
     return map;
   }
+  // Keyword fallback: the writer is missing or failed. It cannot judge
+  // seniority or fit, so it is capped below "mid" (55+) and far below
+  // "strong fit" (75+): a rough guess must never look like a recommendation.
+  // Skills match as whole words, so "go" no longer hits "good"/"Google"/
+  // "MongoDB" and "rag" no longer hits "storage".
+  const FALLBACK_CAP = 54;
   const map = {};
   for (const j of jobs) {
     const text = `${j.title} ${j.description}`.toLowerCase();
-    const hits = (profile.skills || []).filter(s => text.includes(String(s).toLowerCase()));
-    const score = Math.min(95, 40 + hits.length * 12);
+    const hits = (profile.skills || []).filter(s => hasWord(text, s));
+    const score = Math.min(FALLBACK_CAP, 40 + hits.length * 4);
     map[String(j.id)] = {
       score,
-      reasons: hits.length
-        ? [`Matches your skills: ${hits.slice(0, 4).join(', ')}`]
-        : ['Looks broadly right for you — set the writer up in Settings for a proper read of this one']
+      reasons: [
+        'Not checked by the AI — this is a rough keyword guess only',
+        ...(hits.length ? [`Mentions: ${hits.slice(0, 4).join(', ')}`] : [])
+      ]
     };
   }
   return map;
