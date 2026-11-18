@@ -507,6 +507,76 @@ function hasWord(lowerText, skill) {
   return new RegExp(`(?<![a-z0-9])${esc}(?![a-z0-9])`).test(lowerText);
 }
 
+// ---------- Seniority guard for job scoring ----------
+// Job ads put company blurb first and requirements late: in a real Supabase ad
+// "5+ years" sat at character 2,836, while the scorer only ever saw the first
+// 900, so a fresher got 84 "strong fit" for a 5+ year role. The scorer now sees
+// a longer head plus every later sentence that states years of experience, and
+// a deterministic check below enforces the result even if the model ignores it.
+
+const SCORE_DESC_HEAD = 2500;
+const YEARS_RE = /\b(\d{1,2})\s*\+?\s*(?:(?:-|–|to)\s*\d{1,2}\s*\+?\s*)?(?:years?|yrs?)\b/gi;
+
+function scoringDescription(text) {
+  const t = String(text || '');
+  if (t.length <= SCORE_DESC_HEAD) return t;
+  const head = t.slice(0, SCORE_DESC_HEAD);
+  const later = t.slice(SCORE_DESC_HEAD)
+    .split(/\n+|(?<=[.!?])\s+/)
+    .filter(s => { YEARS_RE.lastIndex = 0; return YEARS_RE.test(s); })
+    .map(s => s.trim().slice(0, 240))
+    .slice(0, 6);
+  return later.length
+    ? `${head}\n…\n[Experience requirements stated later in the posting]\n${later.join('\n')}`
+    : head;
+}
+
+// The highest "N years of experience" the ad asks for, or null. Only counts a
+// number tied to experience ("5+ years of …experience", "at least 3 years",
+// "minimum 4 yrs"), so "founded 10 years ago" does not count.
+function requiredYears(text) {
+  const t = String(text || '');
+  let max = null;
+  YEARS_RE.lastIndex = 0;
+  let m;
+  while ((m = YEARS_RE.exec(t))) {
+    const n = Number(m[1]);
+    if (!n || n > 20) continue;
+    const before = t.slice(Math.max(0, m.index - 25), m.index).toLowerCase();
+    const after = t.slice(m.index + m[0].length, m.index + m[0].length + 70).toLowerCase();
+    const tied = /experience|exp\b/.test(after) || /(at least|minimum|min\.?|over)\s*$/.test(before);
+    if (tied && (max === null || n > max)) max = n;
+  }
+  return max;
+}
+
+const SENIOR_TITLE = /\b(senior|sr\.?|staff|lead|principal|head|director|manager|vp|architect)\b/i;
+const EARLY_TITLE = /\b(intern|internship|graduate|grad|junior|jr\.?|entry[- ]level|fresher|trainee|apprentice|new[- ]grad)\b/i;
+// Below MIN_SCORE (40) in discovery.js, so these are filtered as poor fits
+// rather than taking a slot from a job the candidate could actually get.
+const SENIORITY_CAP = 35;
+
+// Adjusts one { score, reasons } entry in place for experience fit. Does
+// nothing when the profile has no years figure to compare against.
+function applySeniority(profile, job, entry) {
+  const raw = profile && profile.years_experience;
+  if (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw))) return entry;
+  const cand = Number(raw);
+  const title = String(job.title || '');
+  const need = requiredYears(job.description);
+  if (need !== null && need >= cand + 2) {
+    entry.score = Math.min(entry.score, SENIORITY_CAP);
+    entry.reasons = [`Asks for ${need}+ years of experience; you have about ${cand}`, ...entry.reasons];
+  } else if (cand < 2 && SENIOR_TITLE.test(title) && !EARLY_TITLE.test(title)) {
+    entry.score = Math.min(entry.score, SENIORITY_CAP);
+    entry.reasons = ['Senior-level title; you are early in your career', ...entry.reasons];
+  } else if (cand < 2 && EARLY_TITLE.test(title)) {
+    entry.score = Math.min(95, entry.score + 10);
+    entry.reasons = ['Early-career role: matches your level', ...entry.reasons];
+  }
+  return entry;
+}
+
 async function scoreJobs(profile, jobs) {
   // score in chunks — one giant call truncates and loses accuracy. The CLI is
   // much slower per call, so it gets smaller chunks to stay inside its timeout.
@@ -522,8 +592,9 @@ async function scoreJobs(profile, jobs) {
     id: j.id,
     title: j.title,
     company: j.company,
-    description: (j.description || '').slice(0, 900)
+    description: scoringDescription(j.description)
   }));
+  const byId = new Map(jobs.map(j => [String(j.id), j]));
   const result = await chatJSON([
     { role: 'system', content: P.SCORE_JOBS },
     {
@@ -536,7 +607,11 @@ async function scoreJobs(profile, jobs) {
   });
   if (result && Array.isArray(result.scores)) {
     const map = {};
-    for (const s of result.scores) map[String(s.id)] = { score: s.score, reasons: s.reasons || [] };
+    for (const s of result.scores) {
+      const entry = { score: Number(s.score) || 0, reasons: s.reasons || [] };
+      const job = byId.get(String(s.id));
+      map[String(s.id)] = job ? applySeniority(profile, job, entry) : entry;
+    }
     return map;
   }
   // Keyword fallback: the writer is missing or failed. It cannot judge
@@ -549,13 +624,13 @@ async function scoreJobs(profile, jobs) {
   for (const j of jobs) {
     const text = `${j.title} ${j.description}`.toLowerCase();
     const hits = (profile.skills || []).filter(s => hasWord(text, s));
-    const score = Math.min(FALLBACK_CAP, 40 + hits.length * 4);
+    const entry = applySeniority(profile, j, {
+      score: 40 + hits.length * 4,
+      reasons: hits.length ? [`Mentions: ${hits.slice(0, 4).join(', ')}`] : []
+    });
     map[String(j.id)] = {
-      score,
-      reasons: [
-        'Not checked by the AI — this is a rough keyword guess only',
-        ...(hits.length ? [`Mentions: ${hits.slice(0, 4).join(', ')}`] : [])
-      ]
+      score: Math.min(FALLBACK_CAP, entry.score),
+      reasons: ['Not checked by the AI — this is a rough keyword guess only', ...entry.reasons]
     };
   }
   return map;
@@ -743,4 +818,5 @@ async function insightsReport(profile, snap, trigger) {
   };
 }
 
-module.exports = { hasKey, providerInfo, claudeCodeStatus, resetClaudeCodeProbe, extractJsonText, extractProfile, scoreJobs, tailorApplication, formatEmailBody, reviewTailored, classifyReply, followUpEmail, insightsReport, devFeedbackReport, PROVIDERS };
+module.exports = { hasKey, providerInfo, claudeCodeStatus, resetClaudeCodeProbe, extractJsonText, extractProfile, scoreJobs,
+  scoringHelpers: { hasWord, scoringDescription, requiredYears, applySeniority }, tailorApplication, formatEmailBody, reviewTailored, classifyReply, followUpEmail, insightsReport, devFeedbackReport, PROVIDERS };
