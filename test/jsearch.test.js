@@ -26,24 +26,23 @@ test('JSearch is off until a key is saved', () => {
   assert.strictEqual(js.isConfigured(), true);
 });
 
-test('request puts the city in the query and applies fresher filters', () => {
+test('request uses search-v2 and puts the city in the query', () => {
   setSettings({ jsearchKey: 'test-key-not-real', jsearchCountry: 'in' });
   const { url, headers } = js.buildRequest('AI Engineer', { maxAgeDays: 7, location: 'Bengaluru', earlyCareer: true });
   const u = new URL(url);
   assert.strictEqual(u.host, 'jsearch.p.rapidapi.com');
-  assert.strictEqual(u.pathname, '/search');
+  assert.strictEqual(u.pathname, '/search-v2');
   assert.strictEqual(u.searchParams.get('query'), 'AI Engineer in Bengaluru');
   assert.strictEqual(u.searchParams.get('country'), 'in');
-  assert.strictEqual(u.searchParams.get('num_pages'), '1');
   assert.strictEqual(u.searchParams.get('date_posted'), 'week');
-  assert.strictEqual(u.searchParams.get('job_requirements'), 'under_3_years_experience');
-  assert.strictEqual(u.searchParams.get('employment_types'), 'FULLTIME,INTERN');
+  // Fresher filters emptied real searches, so they are not sent.
+  assert.strictEqual(u.searchParams.get('job_requirements'), null);
+  assert.strictEqual(u.searchParams.get('employment_types'), null);
   assert.strictEqual(headers['X-RapidAPI-Host'], 'jsearch.p.rapidapi.com');
 
   const remote = new URL(js.buildRequest('AI Engineer', { location: 'remote anywhere' }).url);
   assert.strictEqual(remote.searchParams.get('query'), 'AI Engineer');
   assert.strictEqual(remote.searchParams.get('work_from_home'), 'true');
-  assert.strictEqual(remote.searchParams.get('job_requirements'), null);
 });
 
 test('date filter picks the narrowest step that covers the setting', () => {
@@ -79,8 +78,9 @@ test('a connection failure does not use up a daily search', async () => {
   try {
     await assert.rejects(() => js.searchJSearch('AI Engineer'), /internet/);
     assert.strictEqual(js.usage().used, 0);
-    global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ data: [] }) });
-    await js.searchJSearch('AI Engineer');
+    global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ data: { jobs: [{ job_id: 'x', job_title: 'AI Engineer' }], cursor: 'c' } }) });
+    const jobs = await js.searchJSearch('AI Engineer');
+    assert.strictEqual(jobs.length, 1, 'reads search-v2 data.jobs');
     assert.strictEqual(js.usage().used, 1);
   } finally {
     global.fetch = realFetch;

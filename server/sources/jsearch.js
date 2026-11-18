@@ -4,8 +4,9 @@
 // above-board way to see those sites' listings: no scraping of the sites.
 //
 // Docs: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
-// Every page of up to 10 results costs one request from your RapidAPI plan,
-// and the free plan is small, so JobPilot asks for one page per search and
+// Uses /search-v2 (the old /search endpoint now answers 404). Every page of up
+// to 10 results costs one request from your RapidAPI plan, and the free plan
+// is small, so JobPilot asks for one page per search and
 // stops for the day at a limit you set (default 6 a day).
 const { load, save } = require('../db');
 
@@ -56,25 +57,22 @@ function datePosted(maxAgeDays) {
 }
 
 // Build the request. Exported for tests: no network involved.
-function buildRequest(query, { maxAgeDays = 30, location = '', earlyCareer = false, country } = {}) {
+// No experience filters: JSearch's job_requirements / employment_types turned
+// a search with 10 good Bengaluru results into zero (tested 2026-11), so
+// seniority is left to JobPilot's own scoring.
+function buildRequest(query, { maxAgeDays = 30, location = '', country } = {}) {
   const c = jsearchConfig();
   const remote = /^(remote|anywhere|remote anywhere|worldwide)$/i.test(String(location).trim());
   // JSearch's own advice: put the place in the query and set the country.
   const q = location && !remote ? `${query} in ${location}` : query;
   const params = new URLSearchParams({
     query: q,
-    page: '1',
-    num_pages: '1',
     country: country || c.country,
     date_posted: datePosted(maxAgeDays)
   });
   if (remote) params.set('work_from_home', 'true');
-  if (earlyCareer) {
-    params.set('job_requirements', 'under_3_years_experience');
-    params.set('employment_types', 'FULLTIME,INTERN');
-  }
   return {
-    url: `https://${HOST}/search?${params}`,
+    url: `https://${HOST}/search-v2?${params}`,
     headers: { 'X-RapidAPI-Key': c.key, 'X-RapidAPI-Host': HOST }
   };
 }
@@ -120,7 +118,9 @@ async function searchJSearch(query, opts = {}) {
   if (res.status === 429) throw new Error('your RapidAPI plan for JSearch has run out of requests for now.');
   if (!res.ok) throw new Error('JSearch did not answer just now');
   const data = await res.json();
-  return (Array.isArray(data.data) ? data.data : []).map(toJob);
+  // search-v2 answers { data: { jobs, cursor } }; the old /search answered { data: [...] }.
+  const list = Array.isArray(data.data) ? data.data : (data.data?.jobs || []);
+  return list.map(toJob);
 }
 
 module.exports = { searchJSearch, isConfigured, jsearchConfig, usage, buildRequest, toJob, datePosted };

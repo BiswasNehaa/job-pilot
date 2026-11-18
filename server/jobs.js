@@ -404,12 +404,7 @@ async function searchJobs(query, limit = 10) {
     try {
       // A city if there is one (JSearch wants it in the query), else remote.
       const place = prefs.locations.find(l => !/remote|anywhere|worldwide/i.test(l)) || prefs.locations[0] || '';
-      const years = Number(load().profile?.years_experience);
-      const js = await jsearch.searchJSearch(query, {
-        maxAgeDays: prefs.maxAgeDays,
-        location: place,
-        earlyCareer: Number.isFinite(years) && years < 2
-      });
+      const js = await jsearch.searchJSearch(query, { maxAgeDays: prefs.maxAgeDays, location: place });
       const refined = refine(js, prefs);
       filtered += js.length - refined.length;
       jobs.push(...refined.slice(0, limit));
