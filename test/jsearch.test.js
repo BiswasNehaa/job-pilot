@@ -1,0 +1,73 @@
+// JSearch source: request building, result mapping and the daily limit, with
+// no network calls. Runs against a throwaway data folder.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+process.env.JOBPILOT_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'jobpilot-jsearch-'));
+process.env.GROQ_API_KEY = '';
+process.env.OPENAI_API_KEY = '';
+process.env.ANTHROPIC_API_KEY = '';
+
+const db = require('../server/db');
+const js = require('../server/sources/jsearch');
+
+function setSettings(extra) {
+  const d = db.load();
+  d.settings = { ...(d.settings || {}), ...extra };
+  db.save();
+}
+
+test('JSearch is off until a key is saved', () => {
+  assert.strictEqual(js.isConfigured(), false);
+  setSettings({ jsearchKey: 'test-key-not-real' });
+  assert.strictEqual(js.isConfigured(), true);
+});
+
+test('request puts the city in the query and applies fresher filters', () => {
+  setSettings({ jsearchKey: 'test-key-not-real', jsearchCountry: 'in' });
+  const { url, headers } = js.buildRequest('AI Engineer', { maxAgeDays: 7, location: 'Bengaluru', earlyCareer: true });
+  const u = new URL(url);
+  assert.strictEqual(u.host, 'jsearch.p.rapidapi.com');
+  assert.strictEqual(u.pathname, '/search');
+  assert.strictEqual(u.searchParams.get('query'), 'AI Engineer in Bengaluru');
+  assert.strictEqual(u.searchParams.get('country'), 'in');
+  assert.strictEqual(u.searchParams.get('num_pages'), '1');
+  assert.strictEqual(u.searchParams.get('date_posted'), 'week');
+  assert.strictEqual(u.searchParams.get('job_requirements'), 'under_3_years_experience');
+  assert.strictEqual(u.searchParams.get('employment_types'), 'FULLTIME,INTERN');
+  assert.strictEqual(headers['X-RapidAPI-Host'], 'jsearch.p.rapidapi.com');
+
+  const remote = new URL(js.buildRequest('AI Engineer', { location: 'remote anywhere' }).url);
+  assert.strictEqual(remote.searchParams.get('query'), 'AI Engineer');
+  assert.strictEqual(remote.searchParams.get('work_from_home'), 'true');
+  assert.strictEqual(remote.searchParams.get('job_requirements'), null);
+});
+
+test('date filter picks the narrowest step that covers the setting', () => {
+  assert.strictEqual(js.datePosted(1), 'today');
+  assert.strictEqual(js.datePosted(3), '3days');
+  assert.strictEqual(js.datePosted(14), 'month');
+  assert.strictEqual(js.datePosted(90), 'all');
+});
+
+test('a JSearch result becomes a JobPilot job that says where it came from', () => {
+  const job = js.toJob({
+    job_id: 'abc', job_title: 'Graduate AI Engineer', employer_name: 'Acme', job_publisher: 'LinkedIn',
+    job_city: 'Bengaluru', job_state: 'Karnataka', job_country: 'IN', job_is_remote: false,
+    job_apply_link: 'https://example.com/apply', job_posted_at_timestamp: 1794960000,
+    job_description: 'Build   RAG\nsystems.'
+  });
+  assert.strictEqual(job.id, 'jsearch-abc');
+  assert.strictEqual(job.source, 'JSearch · LinkedIn');
+  assert.strictEqual(job.location, 'Bengaluru, Karnataka, IN');
+  assert.strictEqual(job.description, 'Build RAG systems.');
+  assert.ok(job.publishedAt.startsWith('2026-'));
+});
+
+test('the daily limit stops calls before they are made', async () => {
+  setSettings({ jsearchKey: 'test-key-not-real', jsearchDailyLimit: 0 });
+  await assert.rejects(() => js.searchJSearch('AI Engineer'), /used up/);
+});
