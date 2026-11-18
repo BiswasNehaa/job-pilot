@@ -71,3 +71,18 @@ test('the daily limit stops calls before they are made', async () => {
   setSettings({ jsearchKey: 'test-key-not-real', jsearchDailyLimit: 0 });
   await assert.rejects(() => js.searchJSearch('AI Engineer'), /used up/);
 });
+
+test('a connection failure does not use up a daily search', async () => {
+  setSettings({ jsearchKey: 'test-key-not-real', jsearchDailyLimit: 6, jsearchUsage: { date: new Date().toISOString().slice(0, 10), count: 0 } });
+  const realFetch = global.fetch;
+  global.fetch = async () => { throw new TypeError('fetch failed'); };
+  try {
+    await assert.rejects(() => js.searchJSearch('AI Engineer'), /internet/);
+    assert.strictEqual(js.usage().used, 0);
+    global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ data: [] }) });
+    await js.searchJSearch('AI Engineer');
+    assert.strictEqual(js.usage().used, 1);
+  } finally {
+    global.fetch = realFetch;
+  }
+});

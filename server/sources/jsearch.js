@@ -105,8 +105,17 @@ async function searchJSearch(query, opts = {}) {
     throw new Error(`today's ${limit} JSearch searches are used up, so it was skipped. It starts again tomorrow (change the limit in Settings, under Advanced).`);
   }
   const { url, headers } = buildRequest(query, opts);
-  recordRequest(); // count it before the call: a failed call can still be billed
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+  let res;
+  try {
+    res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+  } catch (err) {
+    // A timeout may have reached RapidAPI and been billed, so it counts. A
+    // connection failure (no internet, DNS) never left this computer, so it
+    // does not: otherwise one offline moment uses up the whole day.
+    if (err?.name === 'TimeoutError') recordRequest();
+    throw new Error(err?.name === 'TimeoutError' ? 'JSearch took too long to answer' : 'could not reach JSearch (check your internet connection)');
+  }
+  recordRequest(); // it reached RapidAPI, so it counts, whatever the answer
   if (res.status === 401 || res.status === 403) throw new Error('RapidAPI did not accept the JSearch key — check it, and that you subscribed to JSearch on RapidAPI.');
   if (res.status === 429) throw new Error('your RapidAPI plan for JSearch has run out of requests for now.');
   if (!res.ok) throw new Error('JSearch did not answer just now');
