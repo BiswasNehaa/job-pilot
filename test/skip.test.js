@@ -14,6 +14,10 @@ process.env.OPENAI_API_KEY = '';
 process.env.ANTHROPIC_API_KEY = '';
 
 const db = require('../server/db');
+// The closed-advert check (when present) would fetch the made-up links; keep
+// every job open so the test needs no network.
+const verify = require('../server/verify');
+verify.filterOpenJobs = async list => ({ open: list, dropped: [] });
 const jobs = require('../server/jobs');
 const job = () => ({ id: 'x1', source: 'Test', title: 'AI Engineer', company: 'Acme', location: 'Bengaluru',
   url: 'https://example.com/x', description: 'Python.', publishedAt: new Date().toISOString() });
