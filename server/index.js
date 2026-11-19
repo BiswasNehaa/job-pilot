@@ -12,7 +12,7 @@ const { load, save, now, logActivity, isFirstRun, DATA_DIR, saveCvOriginal,
         welcomeSettings, sendingMode } = require('./db');
 const llm = require('./llm');
 const email = require('./email');
-const { sourcesConfig, clearAtsCache } = require('./jobs');
+const { sourcesConfig, clearAtsCache, canonicalKey } = require('./jobs');
 const { discover, autoSearchTick, autoSearchConfig, startAutoSearch } = require('./discovery');
 const batch = require('./batch');
 const insights = require('./insights');
@@ -336,6 +336,13 @@ app.get('/api/applications/:id/cv.pdf', async (req, res) => {
 
 app.delete('/api/applications/:id', (req, res) => {
   const db = load();
+  const gone = db.applications.find(x => x.id === req.params.id);
+  // "Not interested" promises the job won't come back. Searches skip jobs
+  // already on the board, so a deleted one used to be added again by the
+  // next search. Keep a small note of it (no description, no CV) instead.
+  if (gone) {
+    db.skipped = [{ id: gone.id, key: gone.key || canonicalKey(gone), at: now() }, ...(db.skipped || [])].slice(0, 5000);
+  }
   db.applications = db.applications.filter(x => x.id !== req.params.id);
   save();
   res.json({ ok: true });

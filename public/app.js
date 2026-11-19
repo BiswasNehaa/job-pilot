@@ -1273,7 +1273,18 @@ function nextStepsHtml(a) {
     <div class="jp-list jp-list--ruled jp-list--flat">${rows.join('')}</div>`;
 }
 
+// Only offer what makes sense for this job: no "I already applied" once you
+// have, and no "They said no" once it is over.
+function updateSkipMenu(a) {
+  const menu = $('#jobSkip');
+  if (!menu) return;
+  menu.open = false;
+  $('#jobSkipApplied')?.classList.toggle('jp-hidden', !!a.appliedAt);
+  $('#jobSkipRejected')?.classList.toggle('jp-hidden', ['rejected', 'closed'].includes(a.status));
+}
+
 function renderDrawer(a) {
+  updateSkipMenu(a);
   const t = a.tailored;
   const where = [a.company, a.location, sourceWords(a.source)].filter(Boolean).join(' · ');
 
@@ -1487,10 +1498,49 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && state.openId) { e.preventDefault(); closeDrawer(); }
 });
 
-// "Not interested" — drop the job altogether. The old drawer's Remove.
+// Skip → "I already applied": you applied on your own, outside JobPilot.
+$('#jobSkipApplied')?.addEventListener('click', async () => {
+  const a = state.applications.find(x => x.id === state.openId);
+  if (!a) return;
+  $('#jobSkip').open = false;
+  if (!confirm(`Have you already applied for ${a.title} at ${a.company}?
+
+We'll start tracking it and remind you to chase them up.`)) return;
+  try {
+    await api(`/api/applications/${a.id}`, { method: 'PATCH', body: { manualApplied: true } });
+    toast("Got it — we're tracking this one now");
+    await refresh();
+  } catch (err) { toast(err.message, true); }
+});
+
+// Skip → "They said no": works before you applied too (a recruiter call, an
+// email elsewhere). It stays under Closed, so it never comes back.
+$('#jobSkipRejected')?.addEventListener('click', async () => {
+  const a = state.applications.find(x => x.id === state.openId);
+  if (!a) return;
+  $('#jobSkip').open = false;
+  if (!confirm(`Did ${a.company} turn you down for this one?
+
+We'll stop chasing it and keep it under Closed.`)) return;
+  try {
+    await api(`/api/applications/${a.id}`, { method: 'PATCH', body: { status: 'rejected' } });
+    toast("Sorry to hear it — we've stopped chasing this one");
+    await refresh();
+  } catch (err) { toast(err.message, true); }
+});
+
+// Close the Skip menu on a click anywhere else.
+document.addEventListener('click', e => {
+  const menu = $('#jobSkip');
+  if (menu?.open && !menu.contains(e.target)) menu.open = false;
+});
+
+// Skip → "Not interested": drop the job altogether. The server keeps a small
+// note of it so later searches don't add it again.
 $('#jobPanelDrop')?.addEventListener('click', async () => {
   const a = state.applications.find(x => x.id === state.openId);
   if (!a) return;
+  $('#jobSkip').open = false;
   if (!confirm(`Take ${a.title} at ${a.company} off your list?\n\n`
     + (a.appliedAt
       ? 'You have already applied to this one, so its history goes too.'
