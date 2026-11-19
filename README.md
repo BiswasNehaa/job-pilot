@@ -354,6 +354,11 @@ round sensible (the default is 50) and expect occasional throttling if you push 
   whose stated application deadline has passed, whose page is gone (404/410), or whose page
   says the job is closed or filled. Anything uncertain is kept. The activity line says how
   many were left out.
+- **Skip a job** — the *Skip* menu in a job's panel: *I already applied* (tracks it and
+  reminds you to follow up), *They said no* (moves it to Closed) or *Not interested* (removes
+  it). Whichever you pick, later searches never bring that job back.
+- **One search at a time** — a search started while another is running waits for it, so the
+  same job is never added twice.
 - **City names** — places that go by two names match either way (Bangalore/Bengaluru,
   Gurgaon/Gurugram, Bombay/Mumbai and more), so jobs aren't thrown away over spelling.
 - **Liveness check** — each posting is re-fetched right before sending; expired jobs are
