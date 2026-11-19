@@ -81,3 +81,34 @@ test('Undo brings a skipped job back exactly as it was', async () => {
     assert.strictEqual(await post(server, '/api/applications/u1/restore'), 404, 'nothing left to restore');
   } finally { server.close(); }
 });
+
+function postJson(server, p, body) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = http.request({ host: '127.0.0.1', port: server.address().port, path: p, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } },
+      res => { let s = ''; res.on('data', c => { s += c; }); res.on('end', () => resolve(JSON.parse(s || '{}'))); });
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+test('Skip all weak fits takes only unapplied jobs, and Undo brings them all back', async () => {
+  const d = db.load();
+  d.applications = [
+    { id: 'w1', title: 'AWS Architect', company: 'A', status: 'discovered', matchScore: 20 },
+    { id: 'w2', title: 'DevOps', company: 'B', status: 'discovered', matchScore: 30 },
+    { id: 'p1', title: 'Applied one', company: 'C', status: 'applied', appliedAt: Date.now(), matchScore: 25 }
+  ];
+  d.skipped = [];
+  db.save();
+  const server = app.listen(0);
+  try {
+    const r = await postJson(server, '/api/applications/skip', { ids: ['w1', 'w2', 'p1'] });
+    assert.strictEqual(r.skipped, 2, 'the applied job is never skipped in bulk');
+    assert.deepStrictEqual(db.load().applications.map(a => a.id), ['p1']);
+    const back = await postJson(server, '/api/applications/restore', { ids: ['w1', 'w2'] });
+    assert.strictEqual(back.restored, 2);
+    assert.deepStrictEqual(db.load().applications.map(a => a.id).sort(), ['p1', 'w1', 'w2']);
+  } finally { server.close(); }
+});

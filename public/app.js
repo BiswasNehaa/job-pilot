@@ -972,10 +972,14 @@ function jobsScreenHtml(data) {
     // Say "sent" when the person is the one emailing them, "applied" when the
     // company only takes applications on its own form.
     const allByEmail = col.rows.every(a => a.recipientEmail) && sendsHerself(data);
+    // Weak fits you haven't applied to: one button clears them all.
+    const weak = col.rows.filter(isSkippableWeak);
     const bulk = col.id === 'needsyou' && col.rows.length > 1
       ? `<button class="jp-btn jp-btn--secondary jp-btn--xs jp-spacer" id="jobsAllApplied">${allByEmail
         ? "I've sent all of these" : "I've applied to all of these"}</button>`
-      : '';
+      : weak.length > 1
+        ? `<button class="jp-btn jp-btn--secondary jp-btn--xs jp-spacer" data-skip-weak="${esc(col.id)}">Skip all ${weak.length} weak fits</button>`
+        : '';
     return `
       <div style="margin-bottom:26px">
         <div class="jp-row-flex" style="gap:10px;margin-bottom:10px">
@@ -1047,6 +1051,33 @@ async function markAllApplied() {
   } catch (err) { toast(err.message, true); }
 }
 
+// A weak fit (under 55) you haven't applied to or had written: safe to clear in bulk.
+function isSkippableWeak(a) {
+  return ['discovered', 'approved'].includes(a.status) && !a.appliedAt && !a.tailored && (a.matchScore || 0) < 55;
+}
+
+// "Skip all N weak fits": one question (it is many at once), then Undo for all.
+async function skipAllWeak() {
+  const weak = ((JobPilot.data && JobPilot.data.applications) || state.applications).filter(isSkippableWeak);
+  if (!weak.length) return;
+  if (!confirm(`Skip all ${weak.length} weak fits?
+
+They come off your list and later searches won't bring them back. You can undo this for 10 minutes.`)) return;
+  try {
+    const ids = weak.map(a => a.id);
+    const r = await api('/api/applications/skip', { method: 'POST', body: { ids } });
+    for (const id of ids) document.querySelector(`#mount-jobs [data-job="${CSS.escape(id)}"]`)?.remove();
+    toastAction(`Skipped ${r.skipped} weak fit${r.skipped === 1 ? '' : 's'}. They won't come back.`, 'Undo', async () => {
+      try {
+        const back = await api('/api/applications/restore', { method: 'POST', body: { ids } });
+        toast(`${back.restored} back on your list`);
+        refresh();
+      } catch (err) { toast(err.message, true); }
+    });
+    refresh();
+  } catch (err) { toast(err.message, true); }
+}
+
 // Skip, right on the row: one click, no questions, with Undo in the toast.
 // For the ones you can tell from the title alone aren't for you.
 async function skipFromRow(id) {
@@ -1070,6 +1101,7 @@ async function skipFromRow(id) {
 
 // A row opens the panel. Delegated, so a re-render never loses the handler.
 document.addEventListener('click', e => {
+  if (e.target.closest('#mount-jobs [data-skip-weak]')) { skipAllWeak(); return; }
   const skip = e.target.closest('#mount-jobs [data-skip-job]');
   if (skip) { skipFromRow(skip.dataset.skipJob); return; }
   const row = e.target.closest('#mount-jobs [data-job]');
