@@ -108,6 +108,7 @@ async function discover(query, { activityLabel = 'Job search', limit = 10, maxAd
       rankScore: Math.round(r.score + r.bonus),
       status: 'discovered',
       createdAt: now(),
+      checkedAt: now(), // just checked by filterOpenJobs above
       appliedAt: null,
       tailored: null,
       followups: [],

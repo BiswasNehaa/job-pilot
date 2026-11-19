@@ -64,3 +64,56 @@ test('filterOpenJobs drops closed adverts and keeps anything uncertain', async (
     server.close();
   }
 });
+
+test('reads the end date and expired flags job sites put in the page source', () => {
+  const { structuredClosed } = require('../server/verify');
+  const ld = obj => `<script type="application/ld+json">${JSON.stringify(obj)}</script>`;
+  const posting = end => ({ '@context': 'https://schema.org', '@type': 'JobPosting', title: 'x', validThrough: end });
+  const now = Date.parse('2026-11-20T12:00:00Z');
+  assert.match(structuredClosed(ld(posting('2026-11-10')), now), /ended on 2026-11-10/);
+  assert.strictEqual(structuredClosed(ld(posting('2026-11-26 23:59:59')), now), null, 'still open');
+  assert.strictEqual(structuredClosed(ld(posting('2026-11-19')), now), null, 'a day of grace');
+  assert.strictEqual(structuredClosed(ld([posting('2026-11-10'), posting('2026-11-11')]), now), null, 'a list of postings proves nothing');
+  assert.match(structuredClosed(ld({ '@graph': [posting('2026-11-01')] }), now), /ended/);
+  // SimplyHired's closed page: 200, with "expired": true in its data.
+  assert.match(structuredClosed('<script>window.__D={"job":{"expired":true}}</script>'), /expired/);
+  assert.strictEqual(structuredClosed('{"expired":true},{"expired":false}'), null, 'mixed flags prove nothing');
+  assert.ok(DEAD_PATTERNS.test('Job posting is not available'));
+});
+
+test('re-checking saved jobs moves closed ones to Closed and keeps the rest', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  process.env.JOBPILOT_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'jobpilot-recheck-'));
+  process.env.GROQ_API_KEY = ''; process.env.OPENAI_API_KEY = ''; process.env.ANTHROPIC_API_KEY = '';
+  const server = http.createServer((req, res) => {
+    if (req.url === '/expired') return res.end('<title>Job posting is not available</title>');
+    if (req.url === '/ended') return res.end(`<script type="application/ld+json">{"@type":"JobPosting","validThrough":"2026-01-01"}</script><h1>Apply</h1>`);
+    return res.end('<h1>Apply now</h1>');
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const db = require('../server/db');
+    const batch = require('../server/batch');
+    const d = db.load();
+    d.applications = [
+      { id: 'a', title: 'A', company: 'X', status: 'discovered', url: `${base}/expired`, description: '' },
+      { id: 'b', title: 'B', company: 'Y', status: 'discovered', url: `${base}/ended`, description: '' },
+      { id: 'c', title: 'C', company: 'Z', status: 'discovered', url: `${base}/open`, description: '' },
+      { id: 'd', title: 'D', company: 'W', status: 'applied', appliedAt: Date.now(), url: `${base}/expired`, description: '' }
+    ];
+    db.save();
+    const r = await batch.recheckSavedJobs({ maxAgeMs: 0 });
+    assert.strictEqual(r.checked, 3, 'applied jobs are left alone');
+    assert.deepStrictEqual(r.closed.map(c => c.id).sort(), ['a', 'b']);
+    const by = Object.fromEntries(db.load().applications.map(a => [a.id, a]));
+    assert.strictEqual(by.a.status, 'closed');
+    assert.strictEqual(by.c.status, 'discovered');
+    assert.ok(by.c.checkedAt, 'open ones are marked as checked');
+    assert.strictEqual(by.d.status, 'applied');
+    const again = await batch.recheckSavedJobs();
+    assert.strictEqual(again.checked, 0, 'recently checked jobs are not re-read');
+  } finally { server.close(); }
+});
