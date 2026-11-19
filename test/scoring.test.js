@@ -54,3 +54,23 @@ test('hasWord matches whole words only', () => {
   assert.ok(H.hasWord('modern c++ codebase', 'c++'));
   assert.ok(!H.hasWord('object storage', 'rag'));
 });
+
+test('writer scores reach jobs with long ids, and left-out jobs get the capped guess', () => {
+  const { mapScores } = require('../server/llm').scoringHelpers;
+  const profile = { years_experience: 0, skills: ['Python'] };
+  const longId = 'jsearch-' + 'UWItR0c2ZVBmT183ZFVaZ0FBQUFBQT09OkVzd0JDb3dCUVVSRVlsZGxX'.repeat(3);
+  const jobs = [
+    { id: longId, title: 'AI Engineering Intern', description: 'Python, RAG.' },
+    { id: 'b', title: 'Senior AI Engineer', description: 'Python.' },
+    { id: 'c', title: 'AI Engineer', description: 'Python and LLMs.' }
+  ];
+  // The writer answers with the short ids it was given, and skips job 3.
+  const map = mapScores(profile, jobs, { scores: [
+    { id: '1', score: 90, reasons: ['Good fit'] },
+    { id: 2, score: 80, reasons: ['Strong skills'] }
+  ] });
+  assert.strictEqual(map[longId].score >= 90, true);
+  assert.ok(map.b.score <= 35, 'senior title capped for a fresher');
+  assert.ok(map.c.score <= 54, 'left-out job gets the capped guess, not 50 by default');
+  assert.match(map.c.reasons[0], /rough keyword guess/);
+});

@@ -577,6 +577,25 @@ function applySeniority(profile, job, entry) {
   return entry;
 }
 
+// Keyword fallback: used when the writer is missing or failed, and for any job
+// the writer left out of its answer. It cannot judge seniority or fit, so it
+// is capped below "mid" (55+) and far below "strong fit" (75+): a rough guess
+// must never look like a recommendation. Skills match as whole words, so "go"
+// no longer hits "good"/"Google"/"MongoDB" and "rag" no longer hits "storage".
+const FALLBACK_CAP = 54;
+function keywordScore(profile, j) {
+  const text = `${j.title} ${j.description}`.toLowerCase();
+  const hits = (profile.skills || []).filter(s => hasWord(text, s));
+  const entry = applySeniority(profile, j, {
+    score: 40 + hits.length * 4,
+    reasons: hits.length ? [`Mentions: ${hits.slice(0, 4).join(', ')}`] : []
+  });
+  return {
+    score: Math.min(FALLBACK_CAP, entry.score),
+    reasons: ['Not checked by the AI — this is a rough keyword guess only', ...entry.reasons]
+  };
+}
+
 async function scoreJobs(profile, jobs) {
   // score in chunks — one giant call truncates and loses accuracy. The CLI is
   // much slower per call, so it gets smaller chunks to stay inside its timeout.
@@ -588,50 +607,48 @@ async function scoreJobs(profile, jobs) {
     }
     return map;
   }
-  const jobList = jobs.map(j => ({
-    id: j.id,
+  // The writer sees short ids ("1", "2", ...) and we map them back. Some
+  // sources' own ids are long (JSearch's are ~150 characters of base64) and
+  // the writer often copied them back slightly wrong, so its score never
+  // reached the job, which then showed a flat 50 with no seniority check.
+  const jobList = jobs.map((j, i) => ({
+    id: String(i + 1),
     title: j.title,
     company: j.company,
     description: scoringDescription(j.description)
   }));
-  const byId = new Map(jobs.map(j => [String(j.id), j]));
   const result = await chatJSON([
     { role: 'system', content: P.SCORE_JOBS },
     {
       role: 'user',
-      content: `Candidate profile:\n${JSON.stringify(profile)}\n\nJobs:\n${JSON.stringify(jobList)}`
+      content: `Candidate profile:
+${JSON.stringify(profile)}
+
+Jobs:
+${JSON.stringify(jobList)}`
     }
   ], { maxTokens: 3000, promptKinds: ['find'] }).catch(err => {
     console.error('scoreJobs failed:', err.message);
     return null;
   });
-  if (result && Array.isArray(result.scores)) {
-    const map = {};
-    for (const s of result.scores) {
-      const entry = { score: Number(s.score) || 0, reasons: s.reasons || [] };
-      const job = byId.get(String(s.id));
-      map[String(s.id)] = job ? applySeniority(profile, job, entry) : entry;
-    }
-    return map;
-  }
-  // Keyword fallback: the writer is missing or failed. It cannot judge
-  // seniority or fit, so it is capped below "mid" (55+) and far below
-  // "strong fit" (75+): a rough guess must never look like a recommendation.
-  // Skills match as whole words, so "go" no longer hits "good"/"Google"/
-  // "MongoDB" and "rag" no longer hits "storage".
-  const FALLBACK_CAP = 54;
+  return mapScores(profile, jobs, result);
+}
+
+// Turn the writer's answer (short ids) back into { [job.id]: score }.
+// Whatever the writer did not score (it failed, or left a job out) gets the
+// capped keyword guess, never a silent default.
+function mapScores(profile, jobs, result) {
   const map = {};
+  if (result && Array.isArray(result.scores)) {
+    for (const s of result.scores) {
+      const job = jobs[Number(String(s.id).replace(/\D/g, '')) - 1];
+      if (!job || map[String(job.id)]) continue;
+      const entry = { score: Number(s.score) || 0, reasons: s.reasons || [] };
+      map[String(job.id)] = applySeniority(profile, job, entry);
+    }
+  }
   for (const j of jobs) {
-    const text = `${j.title} ${j.description}`.toLowerCase();
-    const hits = (profile.skills || []).filter(s => hasWord(text, s));
-    const entry = applySeniority(profile, j, {
-      score: 40 + hits.length * 4,
-      reasons: hits.length ? [`Mentions: ${hits.slice(0, 4).join(', ')}`] : []
-    });
-    map[String(j.id)] = {
-      score: Math.min(FALLBACK_CAP, entry.score),
-      reasons: ['Not checked by the AI — this is a rough keyword guess only', ...entry.reasons]
-    };
+    if (!map[String(j.id)]) map[String(j.id)] = keywordScore(profile, j);
   }
   return map;
 }
@@ -819,4 +836,4 @@ async function insightsReport(profile, snap, trigger) {
 }
 
 module.exports = { hasKey, providerInfo, claudeCodeStatus, resetClaudeCodeProbe, extractJsonText, extractProfile, scoreJobs,
-  scoringHelpers: { hasWord, scoringDescription, requiredYears, applySeniority }, tailorApplication, formatEmailBody, reviewTailored, classifyReply, followUpEmail, insightsReport, devFeedbackReport, PROVIDERS };
+  scoringHelpers: { hasWord, scoringDescription, requiredYears, applySeniority, mapScores, keywordScore }, tailorApplication, formatEmailBody, reviewTailored, classifyReply, followUpEmail, insightsReport, devFeedbackReport, PROVIDERS };
