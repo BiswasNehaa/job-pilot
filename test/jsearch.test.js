@@ -72,7 +72,7 @@ test('the daily limit stops calls before they are made', async () => {
 });
 
 test('a connection failure does not use up a daily search', async () => {
-  setSettings({ jsearchKey: 'test-key-not-real', jsearchDailyLimit: 6, jsearchUsage: { date: new Date().toISOString().slice(0, 10), count: 0 } });
+  setSettings({ jsearchKey: 'test-key-not-real', jsearchDailyLimit: 6, jsearchUsage: { date: js.today(), count: 0 } });
   const realFetch = global.fetch;
   global.fetch = async () => { throw new TypeError('fetch failed'); };
   try {
@@ -85,4 +85,10 @@ test('a connection failure does not use up a daily search', async () => {
   } finally {
     global.fetch = realFetch;
   }
+});
+
+test('the daily count follows the local date, not UTC', () => {
+  // 00:30 on 19 Nov on this computer's clock is still 19 Nov, whatever UTC says.
+  assert.strictEqual(js.today(new Date(2026, 10, 19, 0, 30)), '2026-11-19');
+  assert.strictEqual(js.today(new Date(2026, 10, 18, 23, 59)), '2026-11-18');
 });

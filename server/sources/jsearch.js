@@ -26,8 +26,11 @@ function isConfigured() {
   return !!jsearchConfig().key;
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
+// The day on this computer's clock, not UTC: in India the UTC date changes at
+// 05:30, so the daily count used to reset at 05:30 instead of midnight.
+function today(d = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // How many requests today has used, and whether one more is allowed.
@@ -123,4 +126,4 @@ async function searchJSearch(query, opts = {}) {
   return list.map(toJob);
 }
 
-module.exports = { searchJSearch, isConfigured, jsearchConfig, usage, buildRequest, toJob, datePosted };
+module.exports = { searchJSearch, isConfigured, jsearchConfig, usage, buildRequest, toJob, datePosted, today };
