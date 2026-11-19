@@ -340,10 +340,27 @@ app.delete('/api/applications/:id', (req, res) => {
   // "Not interested" promises the job won't come back. Searches skip jobs
   // already on the board, so a deleted one used to be added again by the
   // next search. Keep a small note of it (no description, no CV) instead.
+  // The full record is kept for 10 minutes only, so an accidental Skip can
+  // be undone; after that only the small note stays.
+  const UNDO_MS = 10 * 60 * 1000;
+  const skipped = (db.skipped || []).map(s =>
+    s.record && now() - s.at > UNDO_MS ? { id: s.id, key: s.key, at: s.at } : s);
   if (gone) {
-    db.skipped = [{ id: gone.id, key: gone.key || canonicalKey(gone), at: now() }, ...(db.skipped || [])].slice(0, 5000);
+    skipped.unshift({ id: gone.id, key: gone.key || canonicalKey(gone), at: now(), record: gone });
   }
+  db.skipped = skipped.slice(0, 5000);
   db.applications = db.applications.filter(x => x.id !== req.params.id);
+  save();
+  res.json({ ok: true });
+});
+
+// Undo a "Not interested" from the last 10 minutes: put the job back as it was.
+app.post('/api/applications/:id/restore', (req, res) => {
+  const db = load();
+  const i = (db.skipped || []).findIndex(s => s.id === req.params.id && s.record);
+  if (i === -1) return res.status(404).json({ error: "That one can't be brought back any more." });
+  const [entry] = db.skipped.splice(i, 1);
+  if (!db.applications.some(a => a.id === entry.record.id)) db.applications.push(entry.record);
   save();
   res.json({ ok: true });
 });

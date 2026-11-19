@@ -175,6 +175,20 @@ function toast(msg, isErr = false) {
   t._h = setTimeout(() => (t.className = 'toast'), 6000);
 }
 
+// A toast with one button in it (Undo), kept up a little longer.
+function toastAction(msg, label, onClick) {
+  const t = $('#toast');
+  t.textContent = msg + ' ';
+  const b = document.createElement('button');
+  b.className = 'toast-action';
+  b.textContent = label;
+  b.addEventListener('click', () => { t.className = 'toast'; onClick(); });
+  t.appendChild(b);
+  t.className = 'toast show has-action';
+  clearTimeout(t._h);
+  t._h = setTimeout(() => (t.className = 'toast'), 8000);
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -905,6 +919,9 @@ function jobRowHtml(a) {
       </div>
       <span class="jp-row-meta">${esc(jobStateWords(a))}</span>
       <span class="jp-badge${fit.badge}">${fit.word}</span>
+      ${['discovered', 'approved'].includes(a.status)
+    ? `<button class="jp-row-skip" data-skip-job="${esc(a.id)}" title="Not interested: take it off your list">Skip</button>`
+    : ''}
     </div>`;
 }
 
@@ -1030,13 +1047,37 @@ async function markAllApplied() {
   } catch (err) { toast(err.message, true); }
 }
 
+// Skip, right on the row: one click, no questions, with Undo in the toast.
+// For the ones you can tell from the title alone aren't for you.
+async function skipFromRow(id) {
+  const a = state.applications.find(x => x.id === id);
+  if (!a) return;
+  try {
+    await api(`/api/applications/${id}`, { method: 'DELETE' });
+    state.applications = state.applications.filter(x => x.id !== id);
+    // Gone from the list at once; the refresh below brings the counts up to date.
+    document.querySelector(`#mount-jobs [data-job="${CSS.escape(id)}"]`)?.remove();
+    toastAction(`Skipped ${a.title} at ${a.company}. It won't come back.`, 'Undo', async () => {
+      try {
+        await api(`/api/applications/${id}/restore`, { method: 'POST' });
+        toast('Back on your list');
+        refresh();
+      } catch (err) { toast(err.message, true); }
+    });
+    refresh();
+  } catch (err) { toast(err.message, true); }
+}
+
 // A row opens the panel. Delegated, so a re-render never loses the handler.
 document.addEventListener('click', e => {
+  const skip = e.target.closest('#mount-jobs [data-skip-job]');
+  if (skip) { skipFromRow(skip.dataset.skipJob); return; }
   const row = e.target.closest('#mount-jobs [data-job]');
   if (row) openDrawer(row.dataset.job);
 });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
+  if (e.target.closest && e.target.closest('[data-skip-job]')) return; // the button handles itself
   const row = e.target.closest && e.target.closest('#mount-jobs [data-job]');
   if (!row) return;
   e.preventDefault();

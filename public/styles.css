@@ -484,6 +484,19 @@ body.jp-chrome-off .jp-header { display: none; }
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.err { border-color: var(--bad); color: var(--bad); }
+.toast.show.has-action { pointer-events: auto; }
+.toast-action {
+  margin-left: 10px; background: none; border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px 12px; font: inherit; font-size: 14px; font-weight: 600; color: var(--ink); cursor: pointer;
+}
+.toast-action:hover { background: var(--surface2); }
+
+/* Skip, beside the fit badge on each job row */
+.jp-row-skip {
+  flex-shrink: 0; margin-left: 10px; background: none; border: 1px solid var(--line);
+  border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 13px; color: var(--ink2); cursor: pointer;
+}
+.jp-row-skip:hover, .jp-row-skip:focus-visible { color: var(--bad); border-color: var(--bad); background: var(--badSoft); }
 
 /* ---- 5.14 Timeline (Home) ---------------------------------------------- */
 .jp-tl-item { display: flex; gap: 16px; }
