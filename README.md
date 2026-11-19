@@ -357,6 +357,9 @@ round sensible (the default is 50) and expect occasional throttling if you push 
 - **Skip a job** — the *Skip* menu in a job's panel: *I already applied* (tracks it and
   reminds you to follow up), *They said no* (moves it to Closed) or *Not interested* (removes
   it). Whichever you pick, later searches never bring that job back.
+- **Stop** — while JobPilot is finding, writing or sending, a *Stop* button finishes the job in
+  hand and stops; nothing already done is undone. Writing more than 3 applications asks first,
+  since each one takes about a minute with a Claude subscription and uses your AI allowance.
 - **One search at a time** — a search started while another is running waits for it, so the
   same job is never added twice.
 - **City names** — places that go by two names match either way (Bangalore/Bengaluru,
