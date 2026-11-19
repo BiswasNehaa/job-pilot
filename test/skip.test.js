@@ -112,3 +112,17 @@ test('Skip all weak fits takes only unapplied jobs, and Undo brings them all bac
     assert.deepStrictEqual(db.load().applications.map(a => a.id).sort(), ['p1', 'w1', 'w2']);
   } finally { server.close(); }
 });
+
+test('the Not interested note is written to disk, so it survives a restart', async () => {
+  const d = db.load();
+  d.applications = [{ id: 'r1', key: 'acme|ml engineer', title: 'ML Engineer', company: 'Acme', status: 'discovered' }];
+  d.skipped = [];
+  db.save();
+  const server = app.listen(0);
+  try { assert.strictEqual(await del(server, 'r1'), 200); } finally { server.close(); }
+  // Read the saved file itself, not the in-memory copy.
+  const dir = path.join(process.env.JOBPILOT_DATA, 'profiles');
+  const file = path.join(dir, fs.readdirSync(dir)[0], 'data.json');
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok((onDisk.skipped || []).some(s => s.key === 'acme|ml engineer'), 'skipped note saved');
+});
